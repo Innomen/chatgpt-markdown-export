@@ -1,4 +1,4 @@
-(() => {
+(async () => {
   const roles = new Set(["user", "assistant"]);
   const escapeText = (s) => s.replace(/\\/g, "\\\\").replace(/([*_`\[\]<>])/g, "\\$1");
   const clean = (s) => (s || "").replace(/\u00a0/g, " ").replace(/[ \t]+/g, " ").trim();
@@ -113,17 +113,63 @@
     });
     return { messages, containers: containers.length };
   }
+  async function fullConversationMessages() {
+    const match = /^\/c\/([^/]+)/.exec(location.pathname);
+    if (!match) return null;
+    let conversationId;
+    try { conversationId = decodeURIComponent(match[1]); } catch { return null; }
+    if (conversationId.includes(":")) return null; // Client-side branches have no server record.
+    try {
+      const sessionResponse = await fetch("/api/auth/session", { credentials: "include" });
+      if (!sessionResponse.ok) return null;
+      const session = await sessionResponse.json();
+      if (typeof session?.accessToken !== "string" || !session.accessToken) return null;
+      const conversationResponse = await fetch(`/backend-api/conversation/${encodeURIComponent(conversationId)}`, {
+        credentials: "include",
+        headers: { Authorization: `Bearer ${session.accessToken}` }
+      });
+      if (!conversationResponse.ok) return null;
+      const data = await conversationResponse.json();
+      if (!data || typeof data.current_node !== "string" || !data.mapping || typeof data.mapping !== "object") return null;
+      const chain = [];
+      const seen = new Set();
+      let id = data.current_node;
+      while (id && data.mapping[id] && !seen.has(id)) {
+        seen.add(id);
+        const node = data.mapping[id];
+        chain.push(node);
+        id = node.parent;
+      }
+      if (id || !chain.length) return null; // Missing ancestor or cycle: completeness cannot be claimed.
+      const messages = chain.reverse().flatMap((node) => {
+        const message = node.message;
+        const role = message?.author?.role;
+        if (!roles.has(role) || message.metadata?.is_visually_hidden_from_conversation) return [];
+        const type = message.content?.content_type;
+        if (["code", "thoughts", "reasoning_recap"].includes(type)) return [];
+        const parts = Array.isArray(message.content?.parts) ? message.content.parts : [];
+        const markdown = (parts.length ? parts.map((part) => typeof part === "string" ? part : (typeof part?.text === "string" ? part.text : "")).join("\n") : message.content?.text || "").trim();
+        return markdown ? [{ role, markdown }] : [];
+      });
+      return messages.length ? { messages, title: data.title } : null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const current = currentShellMessages();
     const legacy = current.length ? null : legacyMessages();
-    const messages = current.length ? current : legacy.messages;
+    const rendered = current.length ? current : legacy.messages;
+    const full = await fullConversationMessages();
+    const complete = !!full && full.messages.length >= rendered.length;
+    const messages = complete ? full.messages : rendered;
     if (!messages.length) {
-      const code = document.querySelector("[data-turn-key]") || legacy.containers ? "NO_TEXT" : "NO_MESSAGES";
+      const code = document.querySelector("[data-turn-key]") || legacy?.containers ? "NO_TEXT" : "NO_MESSAGES";
       notice(code === "NO_TEXT" ? "Export failed: message containers were found, but no text was extracted (TEXT)." : "Export failed: no ChatGPT messages were found. Wait for the chat to load (DOM).");
       return { ok: false, code };
     }
-    const title = clean(document.title.replace(/\s*[-|]\s*ChatGPT\s*$/i, "")) || "ChatGPT conversation";
-    const filename = (title.replace(/[\\/:*?"<>|\x00-\x1f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 100) || "ChatGPT conversation") + ".md";
+    const title = clean((complete && full.title) || document.title.replace(/\s*[-|]\s*ChatGPT\s*$/i, "")) || "ChatGPT conversation";
+    const filename = (title.replace(/[\\/:*?"<>|\x00-\x1f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 100) || "ChatGPT conversation") + (complete ? "" : " - visible only") + ".md";
     const markdown = `# ${title.replace(/\n/g, " ")}\n\nSource: ${location.href}\n\n` + messages.map(({ role, markdown }) => `## ${role === "user" ? "User" : "Assistant"}\n\n${markdown}`).join("\n\n---\n\n") + "\n";
     try {
       const url = URL.createObjectURL(new Blob([markdown], { type: "text/markdown;charset=utf-8" }));
@@ -138,8 +184,8 @@
       notice("Export failed: Brave could not start the download (DL).");
       return { ok: false, code: "DOWNLOAD" };
     }
-    notice(`Markdown download started for ${messages.length} messages.`, true);
-    return { ok: true, count: messages.length };
+    notice(complete ? `Full conversation download started for ${messages.length} messages.` : `Only ${messages.length} rendered messages were available; downloaded a visible-only file.`, complete);
+    return { ok: true, complete, count: messages.length };
   } catch {
     notice("Export failed while reading this page (CODE).");
     return { ok: false, code: "EXTRACT" };

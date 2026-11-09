@@ -28,9 +28,9 @@ with sync_playwright() as playwright:
         '</div></div></div></article>'
     )
     with page.expect_download() as pending:
-        assert page.evaluate(SCRIPT) == {"ok": True, "count": 2}
+        assert page.evaluate(SCRIPT) == {"ok": True, "complete": False, "count": 2}
     content = Path(pending.value.path()).read_text()
-    assert pending.value.suggested_filename == "Sample.md"
+    assert pending.value.suggested_filename == "Sample - visible only.md"
     assert content.count("Part one") == content.count("Part two") == 1
     assert "```python\nprint(1)\n```" in content
 
@@ -43,12 +43,37 @@ with sync_playwright() as playwright:
         '<div data-turn-key="turn-1"><div data-user-message-bubble>Duplicate preview</div></div>'
     )
     with page.expect_download() as pending:
-        assert page.evaluate(SCRIPT) == {"ok": True, "count": 2}
+        assert page.evaluate(SCRIPT) == {"ok": True, "complete": False, "count": 2}
     content = Path(pending.value.path()).read_text()
     assert "New question" in content
     assert "New **answer**" in content
     assert "result = 2" in content
     assert "Duplicate preview" not in content
+
+    page.route("**/api/auth/session", lambda route: route.fulfill(json={"accessToken": "test-token"}))
+    mapping = {
+        "root": {"parent": None, "message": None},
+        "u1": {"parent": "root", "message": {"author": {"role": "user"}, "content": {"parts": ["Old question"]}}},
+        "a1": {"parent": "u1", "message": {"author": {"role": "assistant"}, "content": {"parts": ["Old answer"]}}},
+        "u2": {"parent": "a1", "message": {"author": {"role": "user"}, "content": {"parts": ["New question"]}}},
+        "a2": {"parent": "u2", "message": {"author": {"role": "assistant"}, "content": {"parts": ["New answer"]}}},
+        "other_branch": {"parent": "u1", "message": {"author": {"role": "assistant"}, "content": {"parts": ["Unselected branch"]}}},
+    }
+    page.route("**/backend-api/conversation/synthetic-test", lambda route: route.fulfill(json={"title": "Full chat", "current_node": "a2", "mapping": mapping}))
+    with page.expect_download() as pending:
+        assert page.evaluate(SCRIPT) == {"ok": True, "complete": True, "count": 4}
+    content = Path(pending.value.path()).read_text()
+    assert pending.value.suggested_filename == "Full chat.md"
+    assert content.index("Old question") < content.index("Old answer") < content.index("New question") < content.index("New answer")
+    assert "Unselected branch" not in content
+
+    mapping["root"]["parent"] = "missing-ancestor"
+    with page.expect_download() as pending:
+        assert page.evaluate(SCRIPT) == {"ok": True, "complete": False, "count": 2}
+    assert pending.value.suggested_filename == "Current shell - visible only.md"
+
+    page.unroute("**/api/auth/session")
+    page.unroute("**/backend-api/conversation/synthetic-test")
 
     page.set_content("<title>Empty - ChatGPT</title>")
     assert page.evaluate(SCRIPT) == {"ok": False, "code": "NO_MESSAGES"}

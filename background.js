@@ -18,7 +18,7 @@ chrome.action.onClicked.addListener(async (tab) => {
       files: ["content.js"]
     });
     if (result?.ok) {
-      await status("MD", `Markdown download started for ${result.count} messages.`, true);
+      await status(result.complete ? "MD" : "PART", result.complete ? `Full conversation download started for ${result.count} messages.` : `Only ${result.count} rendered messages were available; the download is marked visible only.`, result.complete);
     } else if (result?.code === "NO_MESSAGES") {
       await status("DOM", "No ChatGPT message containers were found. Check that the conversation finished loading.");
     } else if (result?.code === "NO_TEXT") {
