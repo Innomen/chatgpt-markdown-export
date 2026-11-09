@@ -8,6 +8,22 @@
       return ["http:", "https:"].includes(parsed.protocol) ? parsed.href.replace(/\)/g, "%29") : "";
     } catch { return ""; }
   };
+  function apiMarkdown(source) {
+    return source
+      .replace(/<Link\b([^>]*)\s*\/>/g, (_, attributes) => {
+        const url = safeUrl((attributes.match(/\burl="([^"]*)"/) || [])[1] || "");
+        const title = (attributes.match(/\btitle="([^"]*)"/) || [])[1] || url;
+        return url ? `[${title}](${url})` : title;
+      })
+      .replace(/<Cite\b[^>]*\s*\/>/g, "")
+      .replace(/<divider\b[^>]*\s*\/>/g, "\n\n---\n\n")
+      .replace(/<icon\b([^>]*)\s*\/>/g, (_, attributes) => {
+        const name = (attributes.match(/\bname="([^"]*)"/) || [])[1];
+        return ({ "arrow-down": "↓", "arrow-right": "→", "arrow-left": "←", "arrow-up": "↑" })[name] || "";
+      })
+      .replace(/<\/?(?:WritingBlock|box|text|row)\b[^>]*>/g, "")
+      .trim();
+  }
   const ignored = (el) => el.matches("button,svg,script,style,[aria-hidden='true'],[hidden],.sr-only,[data-testid*='copy']");
   function inline(node) {
     if (node.nodeType === Node.TEXT_NODE) return escapeText(node.nodeValue || "");
@@ -148,7 +164,7 @@
         const type = message.content?.content_type;
         if (["code", "thoughts", "reasoning_recap"].includes(type)) return [];
         const parts = Array.isArray(message.content?.parts) ? message.content.parts : [];
-        const markdown = (parts.length ? parts.map((part) => typeof part === "string" ? part : (typeof part?.text === "string" ? part.text : "")).join("\n") : message.content?.text || "").trim();
+        const markdown = apiMarkdown(parts.length ? parts.map((part) => typeof part === "string" ? part : (typeof part?.text === "string" ? part.text : "")).join("\n") : message.content?.text || "");
         return markdown ? [{ role, markdown }] : [];
       });
       return messages.length ? { messages, title: data.title } : null;

@@ -54,7 +54,7 @@ with sync_playwright() as playwright:
     mapping = {
         "root": {"parent": None, "message": None},
         "u1": {"parent": "root", "message": {"author": {"role": "user"}, "content": {"parts": ["Old question"]}}},
-        "a1": {"parent": "u1", "message": {"author": {"role": "assistant"}, "content": {"parts": ["Old answer"]}}},
+        "a1": {"parent": "u1", "message": {"author": {"role": "assistant"}, "content": {"parts": ['Old answer <Link url="https://example.com/paper" title="paper"/>.\n<WritingBlock id="1">Quoted reply</WritingBlock>\n<box><text>Foundation</text><icon name="arrow-down"/></box><Cite ref="source"/>']}}},
         "u2": {"parent": "a1", "message": {"author": {"role": "user"}, "content": {"parts": ["New question"]}}},
         "a2": {"parent": "u2", "message": {"author": {"role": "assistant"}, "content": {"parts": ["New answer"]}}},
         "other_branch": {"parent": "u1", "message": {"author": {"role": "assistant"}, "content": {"parts": ["Unselected branch"]}}},
@@ -66,6 +66,9 @@ with sync_playwright() as playwright:
     assert pending.value.suggested_filename == "Full chat.md"
     assert content.index("Old question") < content.index("Old answer") < content.index("New question") < content.index("New answer")
     assert "Unselected branch" not in content
+    assert "[paper](https://example.com/paper)" in content
+    assert "Quoted reply" in content and "Foundation↓" in content
+    assert "<Link" not in content and "<WritingBlock" not in content and "<box" not in content
 
     mapping["root"]["parent"] = "missing-ancestor"
     with page.expect_download() as pending:
